@@ -1,0 +1,14 @@
+name: /Users/virginiadimauro/mamba/envs/geo
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.12
+  - geopandas
+  - rasterio
+  - pyproj
+  - shapely
+  - fiona
+  - gdal
+  - jupyterlab
+prefix: /Users/virginiadimauro/mamba/envs/geo
