@@ -7,10 +7,32 @@
   micromamba activate geo
 
 ## Run pipeline
-python scripts/01_download.py
-python scripts/02_clean.py
-python scripts/03_analysis.py
-python scripts/04_webmap.py
+
+The main reproducible pipeline includes:
+
+1. **QC spatial sanity checks**:
+```bash
+python scripts/01_verify_spatial_data.py
+```
+
+2. **Generate static report figure** (overview + inset with price quantiles):
+```bash
+python scripts/02_make_static_map_overview_inset.py
+```
+
+3. **Full end-to-end ETL** (cleaning, enrichment, spatial joins, aggregation):
+```bash
+jupyter notebook notebooks/05_final_pipeline.ipynb
+```
+
+### Inputs & Outputs
+
+**Inputs** (assumed to be in `data/original/`):
+- `calendar.csv`, `listings.csv`, `reviews.csv`, `neighbourhoods.geojson`
+
+**Outputs**:
+- Processed datasets: `data/processed/*.parquet`, `data/processed/*.geojson`
+- Static report figures: **`reports/figures/*.png`** (unified location)
 
 ## Notes
 - Distances/areas must be computed in a projected CRS (meters), not EPSG:4326.

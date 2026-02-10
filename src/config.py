@@ -35,10 +35,12 @@ PROJECT_ROOT = get_project_root()
 DATA_DIR = PROJECT_ROOT / "data"
 PROCESSED_DIR = DATA_DIR / "processed"
 OUTPUTS_DIR = PROJECT_ROOT / "outputs"
+FIGURES_DIR = PROJECT_ROOT / "reports" / "figures"
 
 # Create directories if missing
 PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+FIGURES_DIR.mkdir(parents=True, exist_ok=True)
 
 # Input files (raw data)
 INPUT_FILES = {
