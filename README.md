@@ -1,22 +1,19 @@
 # Madrid Airbnb - Geospatial Analysis Pipeline
 
-A reproducible, production-ready pipeline for data cleaning, enrichment, and spatial analysis of Madrid Airbnb listings.
+This project implements a reproducible ETL pipeline for spatial analysis of Inside Airbnb data for Madrid. It cleans and enriches listings, integrates neighbourhood polygons through a point-in-polygon join, and produces web-ready GeoJSON layers plus static figures for the report.
 
-## Overview
+```md
+## Repository structure (short)
 
-This project implements a complete ETL (Extract-Transform-Load) pipeline for Airbnb data analysis and produces web-ready GeoJSON outputs and static report figures.
-
-## Repository Structure (short)
-
-```
+```text
 geospatial-project/
-├── environment/                     # conda/micromamba environment spec
-├── data/                            # raw and processed inputs
-├── notebooks/                       # exploratory and final notebooks
-├── scripts/                         # pipeline entrypoint scripts (01_.., 02_..)
-├── src/                             # reusable python modules
-├── reports/figures                  # final static figures
-└── README.md
+├── environment/                 # conda/micromamba environment spec
+├── data/                        # raw inputs and processed outputs
+│   └── processed/
+├── notebooks/                   # exploratory + final notebook
+├── scripts/                     # reproducible entrypoints (01_, 02_, ...)
+├── src/                         # reusable python modules
+└── reports/figures/             # static figures for the report
 ```
 
 ## How to run (minimal CLI)
