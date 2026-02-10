@@ -1,7 +1,6 @@
-name: /Users/virginiadimauro/mamba/envs/geo
+name: geo
 channels:
   - conda-forge
-  - defaults
 dependencies:
   - python=3.12
   - geopandas
@@ -11,4 +10,6 @@ dependencies:
   - fiona
   - gdal
   - jupyterlab
-prefix: /Users/virginiadimauro/mamba/envs/geo
+  - seaborn
+  - matplotlib
+  - pandas
