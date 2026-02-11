@@ -17,13 +17,23 @@
 - **Residual std err**: 0.3986
 
 ### Moran's I Spatial Autocorrelation Test
+
+**Original Analysis (full sample after price filtering, N=18,940)**:
 | Test | k | Moran's I | p-value | Interpretation |
 |------|---|-----------|---------|---------------:|
 | Listing-level (kNN-8) | 8 | 0.0925 | < 0.001 | **Significant** ✓ |
 | Listing-level (kNN-12) | 12 | 0.0729 | < 0.001 | **Significant** ✓ |
 | Neighbourhood-level (Queen) | varies | -0.047 | 0.199 | NOT significant |
 
-**Interpretation**: Fine-grained spatial clustering exists at listing level; neighbourhood fixed effects do not fully capture spatial dependence.
+**Consistency Check (same sample as OLS/LM tests, N=15,641)**:
+| Test | k | Moran's I | p-value | Interpretation |
+|------|---|-----------|---------|---------------:|
+| Listing-level (kNN-8) | 8 | 0.0922 | < 0.001 | **Significant** ✓ |
+
+**Interpretation**: 
+- Fine-grained spatial clustering exists at listing level
+- Neighbourhood fixed effects do not fully capture spatial dependence
+- **✓ Moran's I remains highly significant on OLS regression sample** (confirms spatial autocorrelation is not an artifact of sample selection)
 
 ---
 
@@ -51,7 +61,23 @@
 
 ---
 
-## Recommendation
+## 4. Sample Size Reconciliation & Consistency Verification
+
+**Issue**: Three complementary analyses used different sample sizes:
+- Script 04 (original Moran's I): N = 18,940 (after price filtering, before covariate validation)
+- Script 03 (OLS Model B): N = 15,641 (after complete case analysis)
+- Script 05 (LM diagnostics): N = 15,641 (same subset)
+
+**Resolution** (Script 06 - Consistency Check):
+- Recalculated Moran's I on exact same subset used by OLS/LM (N=15,641)
+- Result: Moran's I = 0.0922, p < 0.001 ✓ **Still highly significant**
+- R² = 0.6313 ✓ **Matches Script 05 exactly**
+
+**Implication**: Spatial autocorrelation is robust to sample selection. All three diagnostics (Moran's I, LM-lag, LM-error) now confirmed on identical N=15,641 sample.
+
+---
+
+## 5. Model Specification Recommendation
 
 Based on diagnostic evidence:
 
