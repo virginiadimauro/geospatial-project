@@ -2,8 +2,8 @@ name: geo
 channels:
   - conda-forge
 dependencies:
-  - python=3.10
-  - 'numpy<2'
+  - python=3.12
+  - numpy=2.3.*
   - pandas
   - pyarrow
   - numexpr
@@ -20,8 +20,9 @@ dependencies:
   - statsmodels
   - scipy
   - scikit-learn
-  - pysal
   - rtree
-  - pip
-  - pip:
-    - spreg
+  - numba
+  - spreg
+  - esda
+  - libpysal
+  - splot

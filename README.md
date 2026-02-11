@@ -66,6 +66,7 @@ Note: keep the project root as the working directory so relative paths in `src/c
 **Outputs and results**
 
 - Estimates and tables are saved in `outputs/tables/` (OLS vs spatial models) and figures in `outputs/figures/`.
+- **Sample audit trail**: `outputs/tables/sample_flow.csv` documents the filtering steps (24,987 → 18,940 → 18,765 → 15,641) and distinguishes between "price-valid" (N=18,940) and "model-complete" (N=15,641) samples (see `docs/reproducibility.md`).
 - Notebooks `notebooks/02_price_investigation.ipynb` and `notebooks/05_final_pipeline.ipynb` document the main analysis flow and summary results.
 
 **Reproducing main results**
