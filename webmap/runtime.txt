@@ -1,0 +1,4 @@
+# Python version for deployment platforms (Streamlit Cloud, Heroku, etc.)
+# Optional: only needed if deploying webmap as standalone service
+# Local development uses environment/environment.yml instead
+python-3.12

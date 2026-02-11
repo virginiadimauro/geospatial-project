@@ -26,3 +26,8 @@ dependencies:
   - esda
   - libpysal
   - splot
+  - pip
+  - pip:
+    - streamlit>=1.28.0
+    - streamlit-folium>=0.11.0
+    - folium>=0.14.0

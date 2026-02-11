@@ -111,3 +111,118 @@ python scripts/03_ols_price_analysis.py  # ✓ Correct
 
 - To reproduce the OLS vs SAR/SEM comparison: run `scripts/03_ols_price_analysis.py` then `scripts/07_spatial_models_sar_sem.py`. CSV files with coefficients and test results will be in `outputs/tables/`.
 
+---
+
+
+## Interactive Web Map
+
+An interactive Streamlit application visualizes spatial autocorrelation in model residuals and validates the superiority of SAR over OLS. The map transforms abstract statistical metrics (Moran's I, residuals) into actionable geographic intelligence.
+
+### Quick Start
+
+```bash
+# Automated launch (with QA validation)
+bash webmap/run.sh
+
+# Manual launch
+micromamba activate geo
+streamlit run webmap/app.py
+
+# Static HTML (no dependencies)
+open reports/maps/interactive_map.html
+```
+
+**Dependencies:** All webmap requirements (streamlit, folium, etc.) are included in `environment/environment.yml`. Optional `webmap/runtime.txt` is for deployment platforms only.
+
+### Interactive Features
+
+**Sidebar controls:**
+- **Price range slider** — Filter by nightly rate (€)
+- **Room type multiselect** — Toggle private/hotel/shared rooms
+- **Accommodates range** — Filter by guest capacity
+- **Model choice radio** — Switch between OLS / SAR / Difference
+- **Residual threshold** — Highlight high-error listings (|residual| > threshold)
+- **Layer toggles** — Show/hide individual points or grid cells
+
+**Map display:**
+- Folium-based interactive map (OpenStreetMap basemap)
+- Color-coded residuals: blue=overestimate, gray=fit, red=underestimate
+- Clickable popups with listing details (price, rating, residuals)
+- Two layers: 5,000 sample points + 23 neighborhood grid cells (~5-6 km²)
+- Legend and interpretation guide embedded
+
+**Summary statistics:** Filtered dataset size, price stats, residual stats by model
+
+### Color Scale
+
+| Color | Residual Range | Interpretation |
+|-------|----------------|----------------|
+| 🔵 Dark blue | ≤ -1.0 | Strong overestimate (OLS too high) |
+| 🔵 Light blue | -0.5 to -0.1 | Mild overestimation |
+| ⚪ Gray/White | -0.1 to +0.1 | Good model fit |
+| 🟠 Light orange | +0.1 to +0.5 | Mild underestimation |
+| 🔴 Dark red | ≥ +0.5 | Strong underestimate (missing factors) |
+
+Diverging blue-gray-red palette is intuitive and colorblind-friendly; neutral white at zero.
+
+### Research Validation
+
+**Question 1: Does SAR reduce spatial autocorrelation?**
+- **Visual answer:** OLS map shows systematic north-south clustering; SAR map shows dispersed residuals
+- **Confirmed:** Moran's I reduction from 0.165 to 0.071 (57% improvement)
+
+**Question 2: Where does OLS fail most?**
+- **Central tourist zones** (Sol, Recoletos, Chamberí) show large positive OLS residuals
+- Tourism premium not captured by baseline model; SAR captures via ρ=0.202 spatial lag term
+
+**Question 3: Does SEM (spatial error) help?**
+- SEM residuals nearly identical to OLS on map
+- **Rejected:** No improvement in clustering patterns (Moran's I ~0.172)
+
+### Regenerate Map Layers
+
+If `data/processed/model_sample.parquet` changes:
+
+```bash
+# Step 1: Extract residuals from OLS/SAR/SEM models
+python scripts/07b_extract_residuals.py
+# → outputs/tables/residuals_for_map.csv (18,940 residuals)
+
+# Step 2: Prepare GeoJSON layers for web map
+python scripts/08_prepare_map_layers.py
+# → data/processed/map_points_sample.geojson (5k sample, 2.4 MB)
+# → data/processed/map_grid_cells.geojson (23 cells, 9 KB)
+
+# Step 3: Validate and launch
+python scripts/qa_webmap.py  # Quality checks (CRS, geometries, files)
+streamlit run webmap/app.py
+```
+
+**Estimated time:** ~6 minutes (5 min extract + 1 min prep)
+
+### Technical Details
+
+**Key files:**
+- `webmap/app.py` — Main Streamlit application
+- `webmap/run.sh` — Automated launcher with QA validation
+- `scripts/07b_extract_residuals.py` — Extract OLS/SAR/SEM residuals
+- `scripts/08_prepare_map_layers.py` — Generate GeoJSON layers
+- `scripts/qa_webmap.py` — Quality assurance (CRS EPSG:4326 web, EPSG:25830 UTM 30N spatial)
+- `reports/maps/interactive_map.html` — Static export (5.9 MB)
+- `webmap/runtime.txt` — Python version (optional, for deployment only)
+
+**Data summary:**
+- Total listings: 18,940 (N)
+- Map sample: 5,000 (26%, random seed=42)
+- Grid cells: 23 (0.05° resolution ≈ 5-6 km)
+- HTML file: 5.9 MB (standalone, shareable)
+
+**CRS consistency:**
+- Web layers: EPSG:4326 (WGS84, degrees)
+- Spatial models: EPSG:25830 (UTM Zone 30N, meters)
+- Conversion: Automatic in scripts
+
+**Visual evidence:**
+- OLS map: Blue/red clusters visible (Moran's I=0.165)
+- SAR map: Uniform colors (Moran's I=0.071, 57% reduction)
+- SEM map: Similar to OLS (no improvement)
