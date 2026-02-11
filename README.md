@@ -1,62 +1,74 @@
-# Madrid Airbnb - Geospatial Analysis Pipeline
+# Madrid Airbnb — Geospatial Analysis
 
-This project implements a reproducible ETL pipeline for spatial analysis of Inside Airbnb data for Madrid. It cleans and enriches listings, integrates neighbourhood polygons through a point-in-polygon join, and produces web-ready GeoJSON layers plus static figures for the report.
+This repository contains a reproducible pipeline for the spatial analysis of Inside Airbnb data in Madrid. The main objective is to assess how much location, captured through accessibility measures and neighbourhood context, explains Airbnb nightly prices beyond property and host characteristics, and whether spatial spillovers justify the use of spatial regression models (SAR/SEM) over OLS.
 
-```md
-## Repository structure (short)
+**Research Question (RQ)**
 
-```text
+To what extent does location—captured through accessibility measures and neighbourhood context—explain Airbnb nightly prices in Madrid beyond property and host characteristics, and is there evidence of spatial spillovers that justify spatial regression models (SAR/SEM) over OLS?
+
+**Project summary**
+
+- **Data:** cleaning and enrichment of listings, integration with neighbourhood polygons (point-in-polygon), and computation of accessibility indicators.
+- **Analytical objective:** estimate the effect of location on prices and test for spatial autocorrelation; compare OLS with spatial models (SAR, SEM).
+- **Main outputs:** OLS results, SAR/SEM estimates, diagnostic tests for spatial autocorrelation (Moran's I), maps and figures for the report.
+
+**Repository structure (short)**
+
 geospatial-project/
-├── environment/                 # conda/micromamba environment spec
-├── data/                        # raw inputs and processed outputs
-│   └── processed/
-├── notebooks/                   # exploratory + final notebook
-├── scripts/                     # reproducible entrypoints (01_, 02_, ...)
-├── src/                         # reusable python modules
-└── reports/figures/             # static figures for the report
-```
+- environment/                 — environment spec (conda/micromamba)
+- data/                        — raw inputs and processed outputs
+- notebooks/                   — exploratory analysis and final pipeline
+- scripts/                     — reproducible entrypoints (01_, 02_, ...)
+- src/                         — reusable Python modules
+- reports/                     — static figures for the report
 
-## How to run (minimal CLI)
+**Key data**
 
-Prerequisites: create/activate the `geo` environment (see `environment/`):
+- `data/original/` — raw files from Inside Airbnb and supplementary tables (listings, calendar, reviews, neighbourhoods).
+- `data/processed/` — cleaned and geo-enriched files used for analysis (e.g. `listings_points_enriched_sample.geojson`, `neighbourhoods_enriched.geojson`).
+
+**Methods and analysis steps**
+
+1. Data cleaning and spatial quality checks (`src/cleaning.py`, `scripts/01_verify_spatial_data.py`).
+2. Spatial enrichment: point-in-polygon join, computation of accessibility measures and neighbourhood context variables (`src/spatial.py`).
+3. OLS analysis as baseline, residual diagnostics and test for spatial autocorrelation (Moran's I) (`scripts/03_ols_price_analysis.py`, `scripts/05_lm_diagnostic_tests.py`).
+4. Fit spatial regression models (SAR, SEM) and compare to OLS to assess spatial spillovers (`scripts/07_spatial_models_sar_sem.py`, `src/spatial.py`).
+
+**Main scripts**
+
+- `scripts/01_verify_spatial_data.py` — spatial quality checks and integrity.
+- `scripts/02_make_static_map_overview_inset.py` — static map for the report.
+- `scripts/03_ols_price_analysis.py` — OLS regressions and result export.
+- `scripts/04_spatial_autocorr_morans_i.py` — Moran's I calculation and residual maps.
+- `scripts/05_lm_diagnostic_tests.py` — linear model diagnostic tests.
+- `scripts/07_spatial_models_sar_sem.py` — estimation and comparison of SAR/SEM models.
+
+**Reproducibility (quick setup)**
+
+1. Create and activate the environment (micromamba/conda):
 
 ```bash
-# with micromamba/conda
 micromamba env create -f environment/environment.yml
 micromamba activate geo
 ```
 
-1) QC spatial sanity checks
+2. Run the scripts in logical order (or use the notebooks in `notebooks/` to reproduce steps):
 
 ```bash
 python scripts/01_verify_spatial_data.py
+python scripts/03_ols_price_analysis.py
+python scripts/04_spatial_autocorr_morans_i.py
+python scripts/07_spatial_models_sar_sem.py
 ```
 
-2) Generate the static report figure (overview + inset)
+Note: keep the project root as the working directory so relative paths in `src/config.py` work.
 
-```bash
-python scripts/02_make_static_map_overview_inset.py
-```
+**Outputs and results**
 
-Inputs (used by the above scripts):
+- Estimates and tables are saved in `outputs/tables/` (OLS vs spatial models) and figures in `outputs/figures/`.
+- Notebooks `notebooks/02_price_investigation.ipynb` and `notebooks/05_final_pipeline.ipynb` document the main analysis flow and summary results.
 
-- `data/processed/listings_clean.parquet`
-- `data/processed/neighbourhoods_enriched.geojson`
+**Reproducing main results**
 
-Output:
+- To reproduce the OLS vs SAR/SEM comparison: run `scripts/03_ols_price_analysis.py` then `scripts/07_spatial_models_sar_sem.py`. CSV files with coefficients and test results will be in `outputs/tables/`.
 
-- `reports/figures/fig_madrid_overview_inset_price.png`
-
-## Notes
-
-- Keep the project root as the working directory when running scripts so relative paths in `src/config.py` work.
-- The `geo` environment pins Python 3.12 in `environment/environment.yml` for reproducibility.
-
-## Troubleshooting
-
-- If imports fail, ensure the `geo` env is active and packages were installed from `environment/environment.yml`.
-- If plotting fails headless on a server, set `MPLBACKEND=Agg` before running.
-
----
-
-For more details on the pipeline, see `notebooks/05_final_pipeline.ipynb` and the `src/` package functions.
