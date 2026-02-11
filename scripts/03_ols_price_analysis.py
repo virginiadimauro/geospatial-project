@@ -5,10 +5,17 @@ Model A: Property + Host characteristics
 Model B: Model A + Location (distance to CBD, neighbourhood dummies)
 """
 
+# NOTE: uses model_sample.parquet for consistent N (centralized data-prep)
+
 import pandas as pd
 import numpy as np
 from pathlib import Path
 import warnings
+import sys
+
+# ensure repo root on path for `src` package imports when running as script
+REPO_ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(REPO_ROOT))
 import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy import stats
@@ -20,6 +27,7 @@ warnings.filterwarnings('ignore')
 import statsmodels.api as sm
 from statsmodels.tools.tools import add_constant
 from statsmodels.stats.outliers_influence import variance_inflation_factor as vif
+from src.prep import load_listings_processed, build_model_df, get_y_X
 
 # ============================================================================
 # 0. SETUP PATHS
@@ -39,47 +47,16 @@ print("=" * 80)
 print("OLS PRICE ANALYSIS: HEDONIC MODEL")
 print("=" * 80)
 
-df = pd.read_parquet(DATA_PROCESSED / "listings_clean.parquet").copy()
+# Use centralized preprocessing
+df_raw = load_listings_processed(DATA_PROCESSED / "listings_clean.parquet")
+# build_model_df will also save model_sample.parquet when instructed by other scripts
+model_sample_path = DATA_PROCESSED / "model_sample.parquet"
+model_df = build_model_df(df_raw, out_path=model_sample_path)
 
-# Price cleaning
-def parse_price(price_str):
-    if pd.isna(price_str):
-        return np.nan
-    if isinstance(price_str, (int, float)):
-        return float(price_str)
-    price_clean = str(price_str).replace('€', '').replace(',', '').strip()
-    try:
-        return float(price_clean)
-    except:
-        return np.nan
+print(f"\n[DATA] Loaded {len(model_df)} listings after centralized prep (model_sample)")
 
-df['price_numeric'] = df['price'].apply(parse_price)
-df = df[df['price_numeric'].notna()].copy()
-
-# Winsorize price (0.5%-99.5%)
-q_low = df['price_numeric'].quantile(0.005)
-q_high = df['price_numeric'].quantile(0.995)
-df['price_winsorized'] = df['price_numeric'].clip(q_low, q_high)
-df['log_price'] = np.log(df['price_winsorized'])
-
-print(f"\n[DATA] Loaded {len(df)} listings after price filtering")
-print(f"       log_price range: [{df['log_price'].min():.3f}, {df['log_price'].max():.3f}]")
-
-# Prepare covariates
-covariate_cols = ['room_type', 'accommodates', 'bedrooms', 'beds', 'bathrooms',
-                  'minimum_nights', 'host_is_superhost', 'host_listings_count',
-                  'number_of_reviews', 'review_scores_rating', 'instant_bookable']
-
-# Impute missing in numeric columns
-for col in ['bedrooms', 'beds', 'bathrooms']:
-    df[col] = df[col].fillna(df[col].median())
-
-# Convert categorical
-df['host_is_superhost'] = df['host_is_superhost'].fillna('f')
-df['host_is_superhost'] = (df['host_is_superhost'] == 't').astype(int)
-df['instant_bookable'] = (df['instant_bookable'] == 't').astype(int)
-df['review_scores_rating'] = df['review_scores_rating'].fillna(0)
-df['host_listings_count'] = df['host_listings_count'].fillna(df['host_listings_count'].median())
+# model_df already contains covariates, dummies and log_price
+df = model_df.reset_index(drop=True).copy()
 
 # ============================================================================
 # 2. CREATE LOCATION FEATURES
@@ -118,13 +95,14 @@ print("\n" + "=" * 80)
 print("MODEL PREPARATION")
 print("=" * 80)
 
-# Create dummy variables for categorical variables
+# Create dummy variables for categorical variables if not already present
 df_model = df.copy()
-df_model = pd.get_dummies(df_model, columns=['room_type'], drop_first=True, dtype=int)
+if 'room_type' in df_model.columns:
+    df_model = pd.get_dummies(df_model, columns=['room_type'], drop_first=True, dtype=int)
 
-# Neighbourhood dummies (will be used only in Model B)
-neighbourhood_dummies = pd.get_dummies(df_model['neighbourhood_cleansed'], prefix='neigh', drop_first=True, dtype=int)
-df_model = pd.concat([df_model, neighbourhood_dummies], axis=1)
+if 'neighbourhood_cleansed' in df_model.columns and not any(col.startswith('neigh_') for col in df_model.columns):
+    neighbourhood_dummies = pd.get_dummies(df_model['neighbourhood_cleansed'], prefix='neigh', drop_first=True, dtype=int)
+    df_model = pd.concat([df_model, neighbourhood_dummies], axis=1)
 
 # Define variable sets
 property_vars = ['accommodates', 'bedrooms', 'beds', 'bathrooms', 'minimum_nights']

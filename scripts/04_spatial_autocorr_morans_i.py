@@ -17,6 +17,11 @@ import numpy as np
 import geopandas as gpd
 from pathlib import Path
 import warnings
+import sys
+
+# ensure repo root on path for `src` imports
+REPO_ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(REPO_ROOT))
 
 # Spatial weights and autocorrelation
 from libpysal.weights import KNN, Queen
@@ -30,6 +35,7 @@ warnings.filterwarnings('ignore')
 # Stats
 import statsmodels.api as sm
 from statsmodels.tools.tools import add_constant
+from src.prep import load_listings_processed, build_model_df, get_y_X
 
 # ============================================================================
 # 0. SETUP
@@ -47,61 +53,32 @@ print("=" * 80)
 print("SPATIAL AUTOCORRELATION ANALYSIS: MORAN'S I (OLS Model B Residuals)")
 print("=" * 80)
 
+# NOTE: uses model_sample.parquet for consistent N (centralized data-prep)
+
 # ============================================================================
 # 1. PREPARE DATA (same as in 03_ols_price_analysis.py)
 # ============================================================================
-print("\n[STEP 1] Loading and preparing data...")
+print("\n[STEP 1] Loading and preparing data... (centralized)")
 
-df = pd.read_parquet(DATA_PROCESSED / "listings_clean.parquet").copy()
+# Prefer the saved model sample for reproducibility
+model_sample_path = DATA_PROCESSED / "model_sample.parquet"
+if model_sample_path.exists():
+    model_df = pd.read_parquet(model_sample_path)
+    print(f"  → Loaded model_sample.parquet with {len(model_df)} listings")
+else:
+    df_raw = load_listings_processed(DATA_PROCESSED / "listings_clean.parquet")
+    model_df = build_model_df(df_raw, out_path=model_sample_path)
+    print(f"  → Built and saved model_sample.parquet with {len(model_df)} listings")
 
-# Price parsing and cleaning
-def parse_price(price_str):
-    if pd.isna(price_str):
-        return np.nan
-    if isinstance(price_str, (int, float)):
-        return float(price_str)
-    price_clean = str(price_str).replace('€', '').replace(',', '').strip()
-    try:
-        return float(price_clean)
-    except:
-        return np.nan
-
-df['price_numeric'] = df['price'].apply(parse_price)
-df = df[df['price_numeric'].notna()].copy()
-
-# Winsorize and log
-q_low = df['price_numeric'].quantile(0.005)
-q_high = df['price_numeric'].quantile(0.995)
-df['price_winsorized'] = df['price_numeric'].clip(q_low, q_high)
-df['log_price'] = np.log(df['price_winsorized'])
-
-# Covariates
-covariate_cols = ['room_type', 'accommodates', 'bedrooms', 'beds', 'bathrooms',
-                  'minimum_nights', 'host_is_superhost', 'host_listings_count',
-                  'number_of_reviews', 'review_scores_rating', 'instant_bookable']
-
-# Impute
-for col in ['bedrooms', 'beds', 'bathrooms']:
-    df[col] = df[col].fillna(df[col].median())
-
-# Convert categorical
-df['host_is_superhost'] = df['host_is_superhost'].fillna('f')
-df['host_is_superhost'] = (df['host_is_superhost'] == 't').astype(int)
-df['instant_bookable'] = (df['instant_bookable'] == 't').astype(int)
-df['review_scores_rating'] = df['review_scores_rating'].fillna(0)
-df['host_listings_count'] = df['host_listings_count'].fillna(df['host_listings_count'].median())
-
-print(f"  → {len(df)} listings ready for OLS")
+df = model_df.reset_index(drop=True).copy()
 
 # ============================================================================
 # 2. FIT MODEL B (same as before)
 # ============================================================================
 print("\n[STEP 2] Fitting OLS Model B (Property + Host + Location + Neighbourhood)...")
 
+# model_df already contains dummies and log_price
 df_model = df.copy()
-df_model = pd.get_dummies(df_model, columns=['room_type'], drop_first=True, dtype=int)
-neighbourhood_dummies = pd.get_dummies(df_model['neighbourhood_cleansed'], prefix='neigh', drop_first=True, dtype=int)
-df_model = pd.concat([df_model, neighbourhood_dummies], axis=1)
 
 # Distance to CBD
 PUERTA_DEL_SOL_LAT, PUERTA_DEL_SOL_LON = 40.4169, -3.7035
@@ -141,102 +118,25 @@ print(f"  → Residuals: mean={residuals.mean():.6f}, std={residuals.std():.6f}"
 
 # Add to dataframe
 df_model['residuals_modelB'] = residuals
-df_spatial = df_model[['listing_id', 'latitude', 'longitude', 'neighbourhood_cleansed', 'residuals_modelB']].copy()
+# Keep only necessary spatial columns (neighbourhood_cleansed may be absent in centralized sample)
+cols_spatial = [c for c in ['listing_id', 'latitude', 'longitude', 'residuals_modelB'] if c in df_model.columns]
+df_spatial = df_model[cols_spatial].copy()
 
 # ============================================================================
-# 3. MORAN'S I - APPROACH A: LISTING-LEVEL (kNN WEIGHTS)
+# 3. MORAN'S I - NEIGHBOURHOOD WORKFLOW (only neighbourhood-level kept)
 # ============================================================================
 print("\n" + "=" * 80)
-print("APPROACH A: LISTING-LEVEL SPATIAL AUTOCORRELATION (k-NN Weights)")
+print("NEIGHBOURHOOD-LEVEL SPATIAL AUTOCORRELATION (Queen Contiguity)")
 print("=" * 80)
 
-# Create point geometries (EPSG:4326)
+# Create point geometries (EPSG:4326) for spatial join to neighbourhoods
 gdf_listings = gpd.GeoDataFrame(
     df_spatial,
     geometry=gpd.points_from_xy(df_spatial['longitude'], df_spatial['latitude']),
     crs='EPSG:4326'
 )
 
-print(f"\nCRS: {gdf_listings.crs}")
-print(f"Geometries valid: {gdf_listings.is_valid.sum()}/{len(gdf_listings)}")
-
-# Reproject to EPSG:25830 (metric) for distance calculations
-gdf_listings_metric = gdf_listings.to_crs('EPSG:25830')
-print(f"Reprojected to EPSG:25830 for k-NN distance calculations")
-
-# Extract coordinates (metric)
-coords_metric = np.array([
-    [geom.x, geom.y] for geom in gdf_listings_metric.geometry
-])
-
-# Moran's I results
 morans_results = []
-
-# k-NN weights: k=8
-print(f"\n[k-NN, k=8]")
-try:
-    w_knn8 = KNN.from_array(coords_metric, k=8)
-    w_knn8.transform = 'r'  # Row-standardize
-    
-    n_weights = w_knn8.n  # Number of observations
-    n_islands = sum(1 for ni in w_knn8.neighbors.values() if len(ni) == 0)
-    print(f"  Weights created: {n_weights} listings, {n_islands} islands")
-    
-    mi_knn8 = Moran(residuals, w_knn8)
-    print(f"  Moran's I: {mi_knn8.I:.6f}")
-    print(f"  p-value (simulation): {mi_knn8.p_sim:.6f}")
-    print(f"  z-score (simulation): {mi_knn8.z_sim:.4f}")
-    
-    morans_results.append({
-        'level': 'listing',
-        'weights': 'knn8',
-        'n': n_weights,
-        'morans_I': mi_knn8.I,
-        'p_sim': mi_knn8.p_sim,
-        'z_sim': mi_knn8.z_sim,
-        'islands': n_islands
-    })
-    
-    # Save Moran's scatter plot
-    fig, ax = plt.subplots(figsize=(8, 8))
-    moran_scatterplot(mi_knn8, ax=ax)
-    ax.set_title('Moran Scatterplot: OLS Residuals (Listing-level, k-NN k=8)', 
-                 fontsize=12, fontweight='bold')
-    plt.tight_layout()
-    plt.savefig(OUTPUT_FIGURES / "morans_scatter_listing_knn8.png", dpi=300, bbox_inches='tight')
-    plt.close()
-    print(f"  ✓ Saved: morans_scatter_listing_knn8.png")
-    
-except Exception as e:
-    print(f"  ERROR: {e}")
-
-# k-NN weights: k=12 (sensitivity check)
-print(f"\n[k-NN, k=12] (sensitivity check)")
-try:
-    w_knn12 = KNN.from_array(coords_metric, k=12)
-    w_knn12.transform = 'r'
-    
-    n_weights = w_knn12.n
-    n_islands = sum(1 for ni in w_knn12.neighbors.values() if len(ni) == 0)
-    print(f"  Weights created: {n_weights} listings, {n_islands} islands")
-    
-    mi_knn12 = Moran(residuals, w_knn12)
-    print(f"  Moran's I: {mi_knn12.I:.6f}")
-    print(f"  p-value (simulation): {mi_knn12.p_sim:.6f}")
-    print(f"  z-score (simulation): {mi_knn12.z_sim:.4f}")
-    
-    morans_results.append({
-        'level': 'listing',
-        'weights': 'knn12',
-        'n': n_weights,
-        'morans_I': mi_knn12.I,
-        'p_sim': mi_knn12.p_sim,
-        'z_sim': mi_knn12.z_sim,
-        'islands': n_islands
-    })
-    
-except Exception as e:
-    print(f"  ERROR: {e}")
 
 # ============================================================================
 # 4. MORAN'S I - APPROACH B: NEIGHBOURHOOD-LEVEL (QUEEN CONTIGUITY)
@@ -262,81 +162,36 @@ try:
         gdf_neigh = gdf_neigh.to_crs('EPSG:4326')
         print(f"  Reprojected to EPSG:4326")
     
-    # Spatial join: listing points (EPSG:4326) to neighbourhood polygons
-    gdf_listings_4326 = gdf_listings.to_crs('EPSG:4326')  # Already 4326, but ensure
-    sjoin = gpd.sjoin(gdf_listings_4326, gdf_neigh[['geometry']], predicate='within', how='left')
-    
-    # Check coverage
-    n_matched = sjoin.index_right.notna().sum()
-    coverage_pct = 100 * n_matched / len(sjoin)
-    print(f"\nSpatial join coverage: {n_matched}/{len(sjoin)} ({coverage_pct:.1f}%)")
-    
+    # Spatial join: robust workflow using polygon index (neigh_idx) only
+    gdf_neigh_reset = gdf_neigh.reset_index().rename(columns={'index': 'neigh_idx'})
+    gdf_listings_4326 = gdf_listings.to_crs('EPSG:4326')  # ensure same CRS
+
+    joined = gpd.sjoin(gdf_listings_4326, gdf_neigh_reset[['neigh_idx', 'geometry']], predicate='within', how='left')
+
+    n_null = joined['neigh_idx'].isna().sum()
+    n_total = len(joined)
+    coverage_pct = 100 * (n_total - n_null) / n_total
+    print(f"\nSpatial join coverage (by neigh_idx): {n_total - n_null}/{n_total} ({coverage_pct:.1f}%)")
+
+    # If many listings unmatched, warn and save examples for debugging
     if coverage_pct < 95:
-        print(f"  WARNING: {100-coverage_pct:.1f}% listings not matched to neighbourhoods")
-    
-    # Use existing neighbourhood_cleansed from listings data (already assigned)
-    # Aggregate residuals by neighbourhood (mean)
-    residuals_by_neigh = df_spatial.groupby('neighbourhood_cleansed')['residuals_modelB'].agg(['mean', 'count']).reset_index()
-    residuals_by_neigh.columns = ['neighbourhood', 'residual_mean', 'count']
-    print(f"\nAggregated residuals: {len(residuals_by_neigh)} neighbourhoods")
-    print(f"  Mean count per neighbourhood: {residuals_by_neigh['count'].mean():.1f}")
-    
-    # Merge residuals with neighbourhoodspolygons
-    # Create a simplified neighbourhood geodataframe with just geometry
-    gdf_neigh_simple = gdf_neigh.reset_index(drop=True)
-    gdf_neigh_simple['neigh_idx'] = range(len(gdf_neigh_simple))
-    
-    # Merge residuals with neighbourhoods by spatial position
-    # Create a mapping from neighbourhood index to aggregated residuals
-    # For now, use the residuals_by_neigh directly and merge on neighbourhood name
-    
-    # Try to get neighbourhood identifiers from GeoJSON
-    # If 'properties' column exists with dict, extract neighbourhood name
-    neigh_names = []
-    for idx in range(len(gdf_neigh)):
-        try:
-            # Try to access properties dict
-            props = gdf_neigh.iloc[idx].get('properties', {})
-            if isinstance(props, dict):
-                neigh_names.append(props.get('neighbourhood', str(idx)))
-            else:
-                neigh_names.append(str(idx))
-        except:
-            neigh_names.append(str(idx))
-    
-    gdf_neigh_simple['neighbourhood_name'] = neigh_names
-    
-    # Merge with aggregated residuals
-    gdf_neigh_with_data = gdf_neigh_simple.merge(
-        residuals_by_neigh,
-        left_on='neighbourhood_name',
-        right_on='neighbourhood',
-        how='left'
+        print(f"  WARNING: High unmatched listings after sjoin: {n_null} listings ({100 - coverage_pct:.1f}% unmatched)")
+        examples = joined[joined['neigh_idx'].isna()][['listing_id', 'latitude', 'longitude']].head(200)
+        examples_path = OUTPUT_TABLES / 'neighbourhoods_unmatched_examples.csv'
+        examples.to_csv(examples_path, index=False)
+        print(f"  ✓ Saved examples of unmatched listings to: {examples_path}")
+
+    # Aggregate residuals by neigh_idx (drop unmatched)
+    residuals_by_idx = (
+        joined.dropna(subset=['neigh_idx']).groupby('neigh_idx')['residuals_modelB']
+        .agg(['mean', 'count']).reset_index()
     )
-    
-    # Keep only rows with data
-    gdf_neigh_with_data = gdf_neigh_with_data.dropna(subset=['residual_mean'])
+    residuals_by_idx.columns = ['neigh_idx', 'residual_mean', 'count']
+    print(f"\nAggregated residuals by neigh_idx: {len(residuals_by_idx)} neighbourhoods")
+
+    # Merge aggregated residuals with neighbourhood polygons by neigh_idx (integer index)
+    gdf_neigh_with_data = gdf_neigh_reset.merge(residuals_by_idx, on='neigh_idx', how='inner')
     print(f"  Neighbourhoods with residual data: {len(gdf_neigh_with_data)}")
-    
-    if len(gdf_neigh_with_data) < 20:
-        print(f"  WARNING: Only {len(gdf_neigh_with_data)} neighbourhoods matched (consider alternative approach)")
-        # If merge didn't work well, use index-based approach
-        # Map listing neighbourhoods to GeoJSON index
-        gdf_neigh_with_data = gdf_neigh.copy()
-        
-        # Try direct assignment using neighbourhood names from listings
-        # Create a numeric ID for neighbourhoods based on their order
-        unique_neighs = df_spatial['neighbourhood_cleansed'].unique()
-        neigh_to_id = {n: i for i, n in enumerate(unique_neighs)}
-        
-        # Get residuals aggregated by neighbourhood
-        neigh_data = df_spatial.copy()
-        neigh_data['neigh_id'] = neigh_data['neighbourhood_cleansed'].map(neigh_to_id)
-        residuals_by_id = neigh_data.groupby('neigh_id')['residuals_modelB'].mean()
-        
-        print(f"  Using index-based mapping: {len(residuals_by_id)} neighbourhoods")
-        gdf_neigh_with_data = gdf_neigh.iloc[:len(residuals_by_id)].copy()
-        gdf_neigh_with_data['residual_mean'] = residuals_by_id.values
     
     # Queen contiguity weights
     print(f"\n[Queen Contiguity]")

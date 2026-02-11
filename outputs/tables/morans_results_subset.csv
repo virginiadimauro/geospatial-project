@@ -1,2 +1,2 @@
 analysis_type,sample,level,weights,n,morans_I,p_sim,z_sim,islands
-consistency_check,subset_n15641,listing,knn8,15641,0.0921511127404887,0.001,24.987143823388354,0
+consistency_check,subset_n15641,listing,knn8,15641,0.09215111274048692,0.001,24.548525496574015,0

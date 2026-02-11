@@ -20,10 +20,10 @@ import pandas as pd
 from pathlib import Path
 from scipy.stats import chi2
 import sys
-
-# Add repo root to path
-repo_root = Path(__file__).parent.parent
-sys.path.insert(0, str(repo_root))
+# ensure repo root on path for `src` imports
+REPO_ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(REPO_ROOT))
+from src.prep import load_listings_processed, build_model_df, get_y_X
 
 # ============================================================================
 # 1. CONFIGURATION
@@ -42,37 +42,26 @@ print("=" * 80)
 print("LM DIAGNOSTIC TESTS FOR SPATIAL AUTOCORRELATION")
 print("=" * 80)
 
+# NOTE: uses model_sample.parquet for consistent N (centralized data-prep)
+
 # ============================================================================
 # 2. LOAD DATA & PREPARE
 # ============================================================================
-print("\nLOADING DATA...")
+print("\nLOADING DATA (centralized model_sample if available)...")
 sys.stdout.flush()
 
-# Load data directly from parquet
-df = pd.read_parquet(PROCESSED_DIR / "listings_clean.parquet").copy()
-print(f"Loaded {len(df)} listings")
+model_sample_path = PROCESSED_DIR / "model_sample.parquet"
+if model_sample_path.exists():
+    df_model = pd.read_parquet(model_sample_path).copy()
+    print(f"Loaded model_sample.parquet with {len(df_model)} listings")
+else:
+    df_raw = load_listings_processed(PROCESSED_DIR / "listings_clean.parquet")
+    df_model = build_model_df(df_raw, out_path=model_sample_path)
+    print(f"Built and saved model_sample.parquet with {len(df_model)} listings")
 
-# Price cleaning function
-def parse_price(price_str):
-    if pd.isna(price_str):
-        return np.nan
-    if isinstance(price_str, (int, float)):
-        return float(price_str)
-    price_clean = str(price_str).replace('€', '').replace(',', '').strip()
-    try:
-        return float(price_clean)
-    except:
-        return np.nan
-
-# Clean price
-df['price_num'] = df['price'].apply(parse_price)
-df = df[df['price_num'].notna()].copy()
-
-# Remove outliers: 0.5%-99.5% quantile
-q1, q99 = df['price_num'].quantile([0.005, 0.995])
-df = df[(df['price_num'] >= q1) & (df['price_num'] <= q99)].copy()
-df['log_price'] = np.log(df['price_num'])
-print(f"After price filtering: {len(df)} listings")
+# ensure _original_idx exists for compatibility
+df_model = df_model.reset_index(drop=True).copy()
+df_model['_original_idx'] = df_model.index
 
 # ============================================================================
 # 3. PREPARE MODEL DATA (SAME AS OLS MODEL B)
@@ -80,56 +69,16 @@ print(f"After price filtering: {len(df)} listings")
 print("\nPREPARING MODEL DATA...")
 sys.stdout.flush()
 
-# Keep track of original indices to filter spatial weights later
-df['_original_idx'] = range(len(df))
+y = df_model['log_price'].values
+# Use df_model as built by prep. df_model already contains covariates and log_price
+# Prepare X columns automatically
+exclude = {'listing_id','latitude','longitude','log_price','price_numeric','price_winsorized','geometry'}
+X_cols_available = [c for c in df_model.columns if c not in exclude]
+# Keep a copy of coordinates for spatial weights construction (some scripts drop them later)
+coords_df = df_model[[c for c in ['longitude','latitude','_original_idx'] if c in df_model.columns]].copy()
+df_model = df_model[X_cols_available + ['log_price','_original_idx']].dropna()
 
-# Covariate columns
-covariate_cols = ['room_type', 'accommodates', 'bedrooms', 'beds', 'bathrooms',
-                  'minimum_nights', 'host_is_superhost', 'host_listings_count',
-                  'number_of_reviews', 'review_scores_rating', 'instant_bookable']
-
-# Impute missing in numeric columns
-for col in ['bedrooms', 'beds', 'bathrooms']:
-    df[col] = df[col].fillna(df[col].median())
-
-# Convert categorical
-df['host_is_superhost'] = df['host_is_superhost'].fillna('f')
-df['host_is_superhost'] = (df['host_is_superhost'] == 't').astype(int)
-df['instant_bookable'] = (df['instant_bookable'] == 't').astype(int)
-
-# Create categorical variables with get_dummies
-df_encoded = pd.get_dummies(df, columns=['room_type'], drop_first=True, dtype=int)
-
-# Create distance variable if available
-if 'dist_cbd_km' not in df_encoded.columns:
-    # Use lon/lat as proxies (normalize to roughly km)
-    # Madrid center approximately 40.4168, -3.7038
-    df_encoded['dist_cbd_km'] = np.sqrt((df_encoded['latitude'] - 40.4168)**2 + (df_encoded['longitude'] - -3.7038)**2) * 111
-else:
-    df_encoded['dist_cbd_km'] = df['dist_cbd_km']
-
-# Prepare X: property vars + host vars + room types + distance
-property_cols = ['accommodates', 'bedrooms', 'beds', 'bathrooms']
-host_cols = ['host_is_superhost', 'host_listings_count', 'number_of_reviews', 'review_scores_rating', 'instant_bookable']
-room_type_cols = [c for c in df_encoded.columns if c.startswith('room_type_')]
-location_cols = ['dist_cbd_km']
-
-# Create neighbourhood dummies if available
-neighbourhood_cols = []
-if 'neighbourhood_cleansed' in df_encoded.columns:
-    neighbourhood_encoded = pd.get_dummies(df_encoded['neighbourhood_cleansed'], prefix='neigh', dtype=int)
-    neighbourhood_cols = [c for c in neighbourhood_encoded.columns if c != neighbourhood_encoded.columns[0]]
-    df_encoded = pd.concat([df_encoded, neighbourhood_encoded], axis=1)
-
-X_cols = property_cols + host_cols + room_type_cols + location_cols + neighbourhood_cols
-
-# Remove missing
-X_cols_available = [c for c in X_cols if c in df_encoded.columns]
-df_model = df_encoded[X_cols_available + ['log_price', '_original_idx']].dropna()
-
-# Get indices for spatial weights filtering
 model_indices = df_model['_original_idx'].values
-
 y = df_model['log_price'].values
 X = df_model[X_cols_available].astype(float).values
 
@@ -172,9 +121,8 @@ from libpysal.weights import KNN
 
 # Create GeoDataFrame for ONLY model indices
 gdf = gpd.GeoDataFrame(
-    df.iloc[model_indices][['price_num', '_original_idx']].copy(), 
-    geometry=gpd.points_from_xy(df.iloc[model_indices]['longitude'], 
-                                df.iloc[model_indices]['latitude']),
+    coords_df.loc[:, ['_original_idx']].reset_index(drop=True).assign(price_num=df_model.get('price_numeric', np.nan)).copy(),
+    geometry=gpd.points_from_xy(coords_df['longitude'], coords_df['latitude']),
     crs='EPSG:4326'
 )
 
@@ -321,11 +269,49 @@ except Exception as e:
     }
 
 # ============================================================================
-# 7. SAVE RESULTS
+# 7. ATTEMPT SPREG VALIDATION AND SAVE RESULTS
 # ============================================================================
 print("\n" + "=" * 80)
-print("SAVING RESULTS")
+print("SPREG VALIDATION (optional) and SAVING RESULTS")
 print("=" * 80)
+
+# Try to compute LM tests using spreg diagnostics for comparison
+spreg_comparison = {
+    'lm_lag_spreg': np.nan, 'p_lm_lag_spreg': np.nan,
+    'rlm_lag_spreg': np.nan, 'p_rlm_lag_spreg': np.nan,
+    'lm_error_spreg': np.nan, 'p_lm_error_spreg': np.nan,
+    'rlm_error_spreg': np.nan, 'p_rlm_error_spreg': np.nan
+}
+
+try:
+    import spreg
+    # If spreg provides LM tests utilities, try to use them. This is optional and
+    # best-effort: different spreg versions expose different functions.
+    try:
+        # Some versions expose diagnostics in spreg.diagnostics
+        from spreg import diagnostics as spdiag
+        # Attempt to run diagnostics on OLS residuals using W constructed earlier
+        # Note: API varies; wrap in try/except to avoid hard failures
+        try:
+            diag = spdiag.diagnostics_sp.LMtests(results_ols, w=w_knn8)
+            # diag may contain attributes for lm tests; try common names
+            spreg_comparison['lm_lag_spreg'] = getattr(diag, 'lm_lag', np.nan)
+        except Exception:
+            pass
+    except Exception:
+        # fallback: some spreg versions put diagnostics elsewhere
+        pass
+except Exception:
+    print("spreg diagnostics not available; skipping spreg LM comparison")
+
+# Save a simple comparison CSV with our results and any spreg results available
+comp = {
+    'metric': ['lm_lag','p_lm_lag','rlm_lag','p_rlm_lag','lm_error','p_lm_error','rlm_error','p_rlm_error'],
+    'ours': [lm_results.get('lm_lag', np.nan), lm_results.get('p_lm_lag', np.nan), lm_results.get('rlm_lag', np.nan), lm_results.get('p_rlm_lag', np.nan), lm_results.get('lm_error', np.nan), lm_results.get('p_lm_error', np.nan), lm_results.get('rlm_error', np.nan), lm_results.get('p_rlm_error', np.nan)],
+    'spreg': [spreg_comparison.get('lm_lag_spreg', np.nan), spreg_comparison.get('p_lm_lag_spreg', np.nan), spreg_comparison.get('rlm_lag_spreg', np.nan), spreg_comparison.get('p_rlm_lag_spreg', np.nan), spreg_comparison.get('lm_error_spreg', np.nan), spreg_comparison.get('p_lm_error_spreg', np.nan), spreg_comparison.get('rlm_error_spreg', np.nan), spreg_comparison.get('p_rlm_error_spreg', np.nan)]
+}
+pd.DataFrame(comp).to_csv(OUTPUT_TABLES / 'lm_comparison.csv', index=False)
+print(f"✓ Saved: {OUTPUT_TABLES / 'lm_comparison.csv'}")
 
 results_df = pd.DataFrame([{
     'weights': 'knn8',

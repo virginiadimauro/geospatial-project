@@ -44,6 +44,7 @@ from statsmodels.tools.tools import add_constant
 # Visualization
 import matplotlib.pyplot as plt
 import seaborn as sns
+from src.prep import load_listings_processed, build_model_df, get_y_X
 
 # ============================================================================
 # SETUP
@@ -60,35 +61,25 @@ print("=" * 80)
 print("SPATIAL ECONOMETRIC MODELS: SAR vs SEM vs OLS")
 print("=" * 80)
 
+# NOTE: uses model_sample.parquet for consistent N (centralized data-prep)
+
 # ============================================================================
 # 1. LOAD AND PREPARE DATA (EXACT COPY FROM SCRIPT 05)
 # ============================================================================
-print("\n[STEP 1] Loading data (exact copy from script 05 for consistency)...")
+print("\n[STEP 1] Loading centralized model sample for consistent N...")
 sys.stdout.flush()
 
-df = pd.read_parquet(DATA_PROCESSED / "listings_clean.parquet").copy()
+model_sample_path = DATA_PROCESSED / "model_sample.parquet"
+if model_sample_path.exists():
+    df_model = pd.read_parquet(model_sample_path).copy()
+    print(f"  → Loaded model_sample.parquet with {len(df_model)} listings")
+else:
+    df_raw = load_listings_processed(DATA_PROCESSED / "listings_clean.parquet")
+    df_model = build_model_df(df_raw, out_path=model_sample_path)
+    print(f"  → Built and saved model_sample.parquet with {len(df_model)} listings")
 
-# Price parsing
-def parse_price(price_str):
-    if pd.isna(price_str):
-        return np.nan
-    if isinstance(price_str, (int, float)):
-        return float(price_str)
-    price_clean = str(price_str).replace('€', '').replace(',', '').strip()
-    try:
-        return float(price_clean)
-    except:
-        return np.nan
-
-df['price_num'] = df['price'].apply(parse_price)
-df = df[df['price_num'].notna()].copy()
-
-# Winsorize
-q1, q99 = df['price_num'].quantile([0.005, 0.995])
-df = df[(df['price_num'] >= q1) & (df['price_num'] <= q99)].copy()
-df['log_price'] = np.log(df['price_num'])
-
-print(f"After price filtering: {len(df)} listings")
+# Ensure indices and prepare arrays
+df_model = df_model.reset_index(drop=True).copy()
 
 # ============================================================================
 # 2. PREPARE COVARIATES (EXACT COPY FROM SCRIPT 05)
@@ -97,50 +88,43 @@ print("[STEP 2] Preparing covariates (exact from script 05)...")
 sys.stdout.flush()
 
 # Keep track of original indices
-df['_original_idx'] = range(len(df))
 
-# Impute missing in numeric columns
-for col in ['bedrooms', 'beds', 'bathrooms']:
-    df[col] = df[col].fillna(df[col].median())
+# Basic sanity checks BEFORE building y, X and weights
+print(f"  → model_sample initial rows: {len(df_model)}")
+sys.stdout.flush()
 
-# Convert categorical
-df['host_is_superhost'] = df['host_is_superhost'].fillna('f')
-df['host_is_superhost'] = (df['host_is_superhost'] == 't').astype(int)
-df['instant_bookable'] = (df['instant_bookable'] == 't').astype(int)
+exclude = {'listing_id','latitude','longitude','log_price','price_numeric','price_winsorized','geometry'}
 
-# Create categorical variables with get_dummies
-df_encoded = pd.get_dummies(df, columns=['room_type'], drop_first=True, dtype=int)
+# Require key columns to be present in `df_model` (no fallbacks)
+required_cols = ['log_price']
+coord_cols = ['geometry'] if 'geometry' in df_model.columns else ['latitude', 'longitude']
+missing = [c for c in required_cols + coord_cols if c not in df_model.columns]
+if missing:
+    raise ValueError(f"Missing column(s) in model_sample.parquet: {', '.join(missing)}")
 
-# Create distance variable
-if 'dist_cbd_km' not in df_encoded.columns:
-    df_encoded['dist_cbd_km'] = np.sqrt((df_encoded['latitude'] - 40.4168)**2 + 
-                                        (df_encoded['longitude'] - -3.7038)**2) * 111
+# Prepare X and y from model_df (use only columns already present)
+X_cols_available = [c for c in df_model.columns if c not in exclude]
+# Include coordinates in the dropna selection to ensure alignment
+coord_cols_to_include = []
+if 'geometry' in df_model.columns:
+    coord_cols_to_include = ['geometry']
 else:
-    df_encoded['dist_cbd_km'] = df['dist_cbd_km']
+    coord_cols_to_include = ['latitude', 'longitude'] if all(c in df_model.columns for c in ['latitude', 'longitude']) else []
 
-# Prepare X: property vars + host vars + room types + distance
-property_cols = ['accommodates', 'bedrooms', 'beds', 'bathrooms']
-host_cols = ['host_is_superhost', 'host_listings_count', 'number_of_reviews', 
-             'review_scores_rating', 'instant_bookable']
-room_type_cols = [c for c in df_encoded.columns if c.startswith('room_type_')]
-location_cols = ['dist_cbd_km']
+df_model = df_model[X_cols_available + ['log_price'] + coord_cols_to_include].dropna().reset_index(drop=True)
 
-# Create neighbourhood dummies
-neighbourhood_cols = []
-if 'neighbourhood_cleansed' in df_encoded.columns:
-    neighbourhood_encoded = pd.get_dummies(df_encoded['neighbourhood_cleansed'], 
-                                           prefix='neigh', dtype=int)
-    neighbourhood_cols = [c for c in neighbourhood_encoded.columns 
-                         if c != neighbourhood_encoded.columns[0]]
-    df_encoded = pd.concat([df_encoded, neighbourhood_encoded], axis=1)
+print(f"  → model_sample after trimming rows: {len(df_model)}")
+sys.stdout.flush()
 
-X_cols = property_cols + host_cols + room_type_cols + location_cols + neighbourhood_cols
+# Preserve coords from the final trimmed df_model so spatial weights match y/X
+if 'geometry' in df_model.columns:
+    coords_df = gpd.GeoDataFrame(df_model[[c for c in ['geometry','listing_id'] if c in df_model.columns]]).copy()
+else:
+    coords_df = df_model[[c for c in ['longitude','latitude','listing_id'] if c in df_model.columns]].copy()
 
-# Remove missing - SAME STEP THAT REDUCES TO N=15,641
-X_cols_available = [c for c in X_cols if c in df_encoded.columns]
-df_model = df_encoded[X_cols_available + ['log_price', '_original_idx']].dropna()
+df_model = df_model.reset_index(drop=True).copy()
 
-# Get indices for matching weights
+df_model['_original_idx'] = df_model.index
 model_indices = df_model['_original_idx'].values
 
 y = df_model['log_price'].values
@@ -154,17 +138,16 @@ print(f"Model shape: y={y.shape}, X={X.shape}, N={len(y)}")
 print("\n[STEP 3] Creating spatial weights (k-NN k=8, EPSG:25830)...")
 sys.stdout.flush()
 
-# Subset original dataframe to model indices
-df_subset = df.iloc[model_indices].copy()
+# Build GeoDataFrame from preserved coordinates
+if 'geometry' in coords_df.columns:
+    gdf = gpd.GeoDataFrame(coords_df.assign(_original_idx=coords_df.index), geometry='geometry', crs='EPSG:4326')
+else:
+    gdf = gpd.GeoDataFrame(
+        coords_df.assign(_original_idx=coords_df.index),
+        geometry=gpd.points_from_xy(coords_df['longitude'], coords_df['latitude']),
+        crs='EPSG:4326'
+    )
 
-# Create GeoDataFrame
-gdf = gpd.GeoDataFrame(
-    df_subset[['price_num', '_original_idx']].copy(),
-    geometry=gpd.points_from_xy(df_subset['longitude'], df_subset['latitude']),
-    crs='EPSG:4326'
-)
-
-# Reproject to metric for k-NN
 gdf_metric = gdf.to_crs('EPSG:25830')
 
 # Create kNN weights
