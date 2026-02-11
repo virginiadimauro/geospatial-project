@@ -52,16 +52,54 @@ micromamba env create -f environment/environment.yml
 micromamba activate geo
 ```
 
-2. Run the scripts in logical order (or use the notebooks in `notebooks/` to reproduce steps):
+2. Reproduce the pipeline (two phases):
+
+**Phase A: Data Preparation (Notebook-driven, generates `data/processed/` datasets)**
+
+Skip this if `data/processed/` already contains the required files (see note below).
+
+Execute the end-to-end cleaning and enrichment notebook:
 
 ```bash
-python scripts/01_verify_spatial_data.py
-python scripts/03_ols_price_analysis.py
-python scripts/04_spatial_autocorr_morans_i.py
-python scripts/07_spatial_models_sar_sem.py
+jupyter notebook notebooks/05_final_pipeline.ipynb
 ```
 
-Note: keep the project root as the working directory so relative paths in `src/config.py` work.
+This generates:
+- `listings_clean.parquet` — cleaned listings with price parsing and QC
+- `model_sample.parquet` — model-ready sample (N=15,641, all covariates complete)
+- `neighbourhoods_enriched.geojson`, `neighbourhoods_enriched.parquet` — enriched neighbourhood polygons
+- `calendar_enriched_with_neighbourhoods.parquet` — calendar data with spatial joins
+- `reviews_clean.parquet` — cleaned reviews
+
+Alternatively, individual steps can be explored in:
+- `notebooks/02_price_investigation.ipynb` — price data exploration and outlier analysis
+
+**Phase B: Analysis (Scripts, depends on Phase A outputs)**
+
+Once `data/processed/` is populated, run the analysis scripts in order:
+
+```bash
+python scripts/01_verify_spatial_data.py          # QC: verify spatial integrity
+python scripts/03_ols_price_analysis.py            # Baseline: OLS regression (Model A + B)
+python scripts/04_spatial_autocorr_morans_i.py    # Test: Global Moran's I (price-valid sample)
+python scripts/05_lm_diagnostic_tests.py          # Test: LM diagnostics for spatial dependence
+python scripts/06_morans_i_subset_consistency_check.py  # Validation: consistency on model sample
+python scripts/07_spatial_models_sar_sem.py       # Spatial models: SAR and SEM estimation
+python scripts/02_make_static_map_overview_inset.py    # Visual: static map for report
+```
+
+**Note on `data/processed/` re-use**: If you have already run Phase A (or downloaded pre-processed data), you can skip the notebook and proceed directly to Phase B. The scripts will load the required parquet files from `data/processed/`.
+
+---
+
+**Important**: Keep the project root as the working directory so relative paths in `src/config.py` work correctly:
+
+```bash
+cd /path/to/geospatial-project
+python scripts/03_ols_price_analysis.py  # ✓ Correct
+```
+
+(Not from a subdirectory)
 
 **Outputs and results**
 
