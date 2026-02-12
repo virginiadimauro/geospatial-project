@@ -30,6 +30,19 @@ geospatial-project/
 - `data/original/` — raw files from Inside Airbnb and supplementary tables (listings, calendar, reviews, neighbourhoods).
 - `data/processed/` — cleaned and geo-enriched files used for analysis (e.g. `listings_points_enriched_sample.geojson`, `neighbourhoods_enriched.geojson`).
 
+**How to download original data**
+
+1. Open https://insideairbnb.com/get-the-data/
+2. In the table, go to **Madrid, Comunidad de Madrid, Spain — 14 September, 2025**.
+3. Download and place these files in `data/original/` with these names:
+	- `listings.csv.gz` → `listings.csv`
+	- `calendar.csv.gz` → `calendar.csv`
+	- `reviews.csv.gz` → `reviews.csv`
+	- `neighbourhoods.geojson`
+4. (Optional) Download summary files if needed by exploratory checks:
+	- `listings_summary.csv`
+	- `reviews_summary.csv`
+
 **Methods and analysis steps**
 
 1. Data cleaning and spatial quality checks (`src/cleaning.py`, `scripts/01_verify_spatial_data.py`).
