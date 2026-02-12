@@ -30,7 +30,7 @@ from statsmodels.tools.tools import add_constant
 # ============================================================================
 # SETUP
 # ============================================================================
-PROJECT_ROOT = Path("/Users/virginiadimauro/Desktop/UNITN/Secondo Anno/Geospatial Analysis/geospatial-project")
+PROJECT_ROOT = Path(__file__).parent.parent
 DATA_PROCESSED = PROJECT_ROOT / "data" / "processed"
 OUTPUT_TABLES = PROJECT_ROOT / "outputs" / "tables"
 
