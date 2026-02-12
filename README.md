@@ -24,6 +24,9 @@ geospatial-project/
 
 **Key data**
 
+- **Official source:** Inside Airbnb — https://insideairbnb.com/get-the-data/
+- **Dataset reference used in this project:** *Madrid, Comunidad de Madrid, Spain — 14 September, 2025* (download page section).
+
 - `data/original/` — raw files from Inside Airbnb and supplementary tables (listings, calendar, reviews, neighbourhoods).
 - `data/processed/` — cleaned and geo-enriched files used for analysis (e.g. `listings_points_enriched_sample.geojson`, `neighbourhoods_enriched.geojson`).
 
