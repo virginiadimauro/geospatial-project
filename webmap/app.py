@@ -26,6 +26,9 @@ import folium
 from streamlit_folium import st_folium
 import numpy as np
 from pathlib import Path
+import os
+import subprocess
+import sys
 
 # ============================================================================
 # SETUP
@@ -34,19 +37,107 @@ st.set_page_config(page_title="Madrid Airbnb - Spatial Models", layout="wide")
 st.markdown("# Interactive Map: Madrid Airbnb Spatial Analysis")
 st.markdown("Residual maps for model diagnostics and spatial pattern inspection.")
 
-PROJECT_ROOT = Path(__file__).parent.parent  # webmap/ -> project root
+def resolve_project_root() -> Path:
+    env_root = os.getenv("GEOSPATIAL_PROJECT_ROOT")
+    candidates = []
+    if env_root:
+        candidates.append(Path(env_root).expanduser().resolve())
+    candidates.append(Path.cwd().resolve())
+    candidates.append(Path(__file__).resolve().parent.parent)
+
+    for root in candidates:
+        if (root / "webmap" / "app.py").exists():
+            return root
+    return Path(__file__).resolve().parent.parent
+
+
+PROJECT_ROOT = resolve_project_root()
 DATA_PROCESSED = PROJECT_ROOT / "data" / "processed"
 OUTPUT_TABLES = PROJECT_ROOT / "outputs" / "tables"
+
+
+def get_required_paths() -> dict[str, Path]:
+    return {
+        "model sample": DATA_PROCESSED / "model_sample.parquet",
+        "residuals table": OUTPUT_TABLES / "residuals_for_map.csv",
+        "points layer": DATA_PROCESSED / "map_points_sample.geojson",
+        "grid layer": DATA_PROCESSED / "map_grid_cells.geojson",
+    }
+
+
+def get_missing_paths(required_paths: dict[str, Path]) -> list[str]:
+    return [
+        f"{name}: {path}"
+        for name, path in required_paths.items()
+        if not path.exists()
+    ]
+
+
+def bootstrap_missing_webmap_inputs(required_paths: dict[str, Path]) -> tuple[bool, str]:
+    model_sample = required_paths["model sample"]
+    if not model_sample.exists():
+        return (
+            False,
+            "Missing model sample input. Expected file:\n"
+            f"- {model_sample}\n"
+            "Run the data preparation pipeline first: jupyter lab notebooks/05_final_pipeline.ipynb",
+        )
+
+    OUTPUT_TABLES.mkdir(parents=True, exist_ok=True)
+    DATA_PROCESSED.mkdir(parents=True, exist_ok=True)
+
+    commands = [
+        [sys.executable, "scripts/07b_extract_residuals.py"],
+        [sys.executable, "scripts/08_prepare_map_layers.py"],
+    ]
+    for command in commands:
+        result = subprocess.run(
+            command,
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            return (
+                False,
+                "Automatic regeneration failed.\n"
+                f"Command: {' '.join(command)}\n"
+                f"Exit code: {result.returncode}\n"
+                f"Stdout:\n{result.stdout[-2000:]}\n"
+                f"Stderr:\n{result.stderr[-2000:]}",
+            )
+
+    missing_after = get_missing_paths(required_paths)
+    if missing_after:
+        return (
+            False,
+            "Regeneration completed but required files are still missing:\n- "
+            + "\n- ".join(missing_after),
+        )
+
+    return True, "Missing webmap inputs regenerated successfully."
 
 # ============================================================================
 # LOAD DATA
 # ============================================================================
 @st.cache_data
 def load_data():
-    df = pd.read_parquet(DATA_PROCESSED / "model_sample.parquet")
-    resid = pd.read_csv(OUTPUT_TABLES / "residuals_for_map.csv")
-    points = gpd.read_file(DATA_PROCESSED / "map_points_sample.geojson")
-    grid = gpd.read_file(DATA_PROCESSED / "map_grid_cells.geojson")
+    required_paths = get_required_paths()
+    missing_paths = get_missing_paths(required_paths)
+    if missing_paths:
+        raise FileNotFoundError(
+            "Missing required webmap inputs.\n"
+            f"Project root in use: {PROJECT_ROOT}\n"
+            f"Current working directory: {Path.cwd()}\n"
+            "Missing files:\n- "
+            + "\n- ".join(missing_paths)
+            + "\nRun: bash webmap/run.sh"
+        )
+
+    df = pd.read_parquet(required_paths["model sample"])
+    resid = pd.read_csv(required_paths["residuals table"])
+    points = gpd.read_file(required_paths["points layer"])
+    grid = gpd.read_file(required_paths["grid layer"])
 
     required_df_cols = ["listing_id", "price_numeric", "accommodates"]
     required_resid_cols = ["listing_id", "residual_OLS", "residual_SAR"]
@@ -78,6 +169,22 @@ def load_data():
         st.warning("Grid layer contains null/invalid geometries. Invalid rows may be skipped.")
 
     return df, resid, points, grid
+
+required_paths = get_required_paths()
+initial_missing = get_missing_paths(required_paths)
+if initial_missing:
+    st.warning("Missing derived webmap files detected. Attempting automatic regeneration.")
+    ok, bootstrap_message = bootstrap_missing_webmap_inputs(required_paths)
+    if ok:
+        st.info(bootstrap_message)
+    else:
+        st.error(
+            "Error loading data: automatic regeneration did not complete successfully.\n"
+            f"Project root in use: {PROJECT_ROOT}\n"
+            f"Current working directory: {Path.cwd()}\n"
+            f"Details:\n{bootstrap_message}"
+        )
+        st.stop()
 
 try:
     df_full, resid_df, gdf_points, gdf_grid = load_data()

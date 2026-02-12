@@ -47,12 +47,6 @@ cd ../..
 ### 3) Run notebook (data preparation)
 
 ```bash
-jupyter lab notebooks/05_final_pipeline.ipynb
-```
-
-Headless execution (no browser):
-
-```bash
 jupyter execute notebooks/05_final_pipeline.ipynb --inplace
 ```
 
