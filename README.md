@@ -47,8 +47,16 @@ cd ../..
 ### 3) Run notebook (data preparation)
 
 ```bash
-jupyter notebook notebooks/05_final_pipeline.ipynb
+jupyter lab notebooks/05_final_pipeline.ipynb
 ```
+
+Headless execution (no browser):
+
+```bash
+jupyter execute notebooks/05_final_pipeline.ipynb --inplace
+```
+
+Note: if you run from project root, include the `notebooks/` prefix in the path.
 
 Skip this phase only if you already ran it locally and `data/processed/` contains the expected outputs.
 

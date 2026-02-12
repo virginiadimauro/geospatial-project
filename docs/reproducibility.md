@@ -68,8 +68,16 @@ Run commands from project root.
 ### Phase A — Data preparation
 
 ```bash
-jupyter notebook notebooks/05_final_pipeline.ipynb
+jupyter lab notebooks/05_final_pipeline.ipynb
 ```
+
+Headless execution (no browser):
+
+```bash
+jupyter execute notebooks/05_final_pipeline.ipynb --inplace
+```
+
+Path note: when running from project root, use `notebooks/05_final_pipeline.ipynb` (not just `05_final_pipeline.ipynb`).
 
 Expected outputs in `data/processed/` include:
 - `listings_clean.parquet`

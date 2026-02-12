@@ -33,6 +33,7 @@ PROJECT_ROOT = get_project_root()
 
 # Core data paths
 DATA_DIR = PROJECT_ROOT / "data"
+ORIGINAL_DIR = DATA_DIR / "original"
 PROCESSED_DIR = DATA_DIR / "processed"
 OUTPUTS_DIR = PROJECT_ROOT / "outputs"
 FIGURES_DIR = PROJECT_ROOT / "reports" / "figures"
@@ -44,12 +45,12 @@ FIGURES_DIR.mkdir(parents=True, exist_ok=True)
 
 # Input files (raw data)
 INPUT_FILES = {
-    "calendar": DATA_DIR / "calendar.csv",
-    "listings": DATA_DIR / "listings.csv",
-    "reviews": DATA_DIR / "reviews.csv",
-    "neighbourhoods": DATA_DIR / "neighbourhoods.geojson",
-    "listings_summary": DATA_DIR / "listings_summary.csv",  # Optional
-    "reviews_summary": DATA_DIR / "reviews_summary.csv",    # Optional
+    "calendar": ORIGINAL_DIR / "calendar.csv",
+    "listings": ORIGINAL_DIR / "listings.csv",
+    "reviews": ORIGINAL_DIR / "reviews.csv",
+    "neighbourhoods": ORIGINAL_DIR / "neighbourhoods.geojson",
+    "listings_summary": ORIGINAL_DIR / "listings_summary.csv",  # Optional
+    "reviews_summary": ORIGINAL_DIR / "reviews_summary.csv",    # Optional
 }
 
 # Output files (processed)
