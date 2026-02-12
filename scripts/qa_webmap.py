@@ -1,23 +1,22 @@
 #!/usr/bin/env python3
 """
-Quality Assurance Script for Interactive Map
-==============================================
+Quality assurance checks for webmap inputs and artifacts.
 
-Validates:
-1. CRS consistency (web EPSG:4326, modelli EPSG:25830)
-2. GeoJSON geometries valid
-3. All required files exist
-4. Residuals CSV complete and numeric
-5. Color scale and residual ranges valid
+Scope:
+- Required files and scripts
+- GeoJSON readability, CRS, and geometry validity
+- Residuals table schema and basic numeric diagnostics
+- ID consistency between point layer and residual table
+- Streamlit app readability and key dependencies
 
-Run before launching Streamlit to ensure map readiness.
+This script exits with code 1 if blocking errors are detected.
 """
 
 import sys
 from pathlib import Path
+
 import pandas as pd
 import geopandas as gpd
-import numpy as np
 
 PROJECT_ROOT = Path(__file__).parent.parent
 DATA_PROCESSED = PROJECT_ROOT / "data" / "processed"
@@ -25,201 +24,272 @@ OUTPUT_TABLES = PROJECT_ROOT / "outputs" / "tables"
 REPORTS_MAPS = PROJECT_ROOT / "reports" / "maps"
 SCRIPTS = PROJECT_ROOT / "scripts"
 
-print("=" * 80)
-print("WEBMAP QUALITY ASSURANCE CHECK")
-print("=" * 80)
+EXPECTED_WEB_CRS = "EPSG:4326"
+REQUIRED_RESIDUAL_COLUMNS = [
+    "listing_id",
+    "log_price",
+    "residual_OLS",
+    "residual_SAR",
+    "residual_SEM",
+    "abs_residual_SAR",
+]
+RESIDUAL_SCALE_BREAKS = [-2.5, -1.0, -0.5, -0.1, 0.1, 0.5, 1.0, 2.5]
 
-errors = []
-warnings = []
-checks_passed = 0
 
-# ============================================================================
-# CHECK 1: Files exist
-# ============================================================================
-print("\n[1] Checking file existence...")
+def print_header() -> None:
+    print("=" * 80)
+    print("WEBMAP QUALITY ASSURANCE")
+    print("=" * 80)
 
-required_files = {
-    "GeoJSON points": DATA_PROCESSED / "map_points_sample.geojson",
-    "GeoJSON grid": DATA_PROCESSED / "map_grid_cells.geojson",
-    "Residuals CSV": OUTPUT_TABLES / "residuals_for_map.csv",
-    "HTML map": REPORTS_MAPS / "interactive_map.html",
-    "Streamlit app": PROJECT_ROOT / "webmap" / "app.py",
-    "Extract script": SCRIPTS / "07b_extract_residuals.py",
-    "Prep layers script": SCRIPTS / "08_prepare_map_layers.py",
-}
 
-for name, path in required_files.items():
-    if path.exists():
-        size = path.stat().st_size
-        if size > 1e6:
-            size_str = f"{size/1e6:.1f} MB"
-        elif size > 1e3:
-            size_str = f"{size/1e3:.1f} KB"
+def print_check_result(check_id: int, name: str, passed: bool) -> None:
+    status = "PASS" if passed else "FAIL"
+    print(f"\n[{check_id}] {name}: {status}")
+
+
+def format_size(num_bytes: int) -> str:
+    if num_bytes >= 1_000_000:
+        return f"{num_bytes / 1_000_000:.1f} MB"
+    if num_bytes >= 1_000:
+        return f"{num_bytes / 1_000:.1f} KB"
+    return f"{num_bytes} B"
+
+
+def check_required_files(errors: list[str]) -> bool:
+    required_files = {
+        "GeoJSON points": DATA_PROCESSED / "map_points_sample.geojson",
+        "GeoJSON grid": DATA_PROCESSED / "map_grid_cells.geojson",
+        "Residuals CSV": OUTPUT_TABLES / "residuals_for_map.csv",
+        "HTML map": REPORTS_MAPS / "interactive_map.html",
+        "Streamlit app": PROJECT_ROOT / "webmap" / "app.py",
+        "Extract script": SCRIPTS / "07b_extract_residuals.py",
+        "Prep layers script": SCRIPTS / "08_prepare_map_layers.py",
+    }
+
+    failed = False
+    for label, path in required_files.items():
+        if path.exists():
+            print(f"  - {label}: FOUND ({format_size(path.stat().st_size)})")
         else:
-            size_str = f"{size} B"
-        print(f"  ✓ {name}: {path.name} ({size_str})")
-        checks_passed += 1
-    else:
-        errors.append(f"Missing file: {name} at {path}")
-        print(f"  ✗ {name}: NOT FOUND")
+            failed = True
+            errors.append(f"Missing file: {label} at {path}")
+            print(f"  - {label}: NOT FOUND")
 
-# ============================================================================
-# CHECK 2: GeoJSON validity and CRS
-# ============================================================================
-print("\n[2] Validating GeoJSON files...")
+    return not failed
 
-try:
-    gdf_points = gpd.read_file(DATA_PROCESSED / "map_points_sample.geojson")
-    print(f"  ✓ Points GeoJSON: {len(gdf_points)} features")
-    if gdf_points.crs != "EPSG:4326":
-        warnings.append(f"Points CRS is {gdf_points.crs}, expected EPSG:4326")
-    if gdf_points.geometry.isna().any():
-        errors.append("Points GeoJSON has NULL geometries")
-    if not gdf_points.geometry.is_valid.all():
-        errors.append("Points GeoJSON has invalid geometries")
-    else:
-        print(f"    - CRS: {gdf_points.crs} (✓ EPSG:4326)")
-        print(f"    - All geometries valid: ✓")
-        checks_passed += 1
-except Exception as e:
-    errors.append(f"Failed to load points GeoJSON: {e}")
 
-try:
-    gdf_grid = gpd.read_file(DATA_PROCESSED / "map_grid_cells.geojson")
-    print(f"  ✓ Grid GeoJSON: {len(gdf_grid)} features")
-    if gdf_grid.crs != "EPSG:4326":
-        warnings.append(f"Grid CRS is {gdf_grid.crs}, expected EPSG:4326")
-    if gdf_grid.geometry.isna().any():
-        errors.append("Grid GeoJSON has NULL geometries")
-    if not gdf_grid.geometry.is_valid.all():
-        errors.append("Grid GeoJSON has invalid geometries")
-    else:
-        print(f"    - CRS: {gdf_grid.crs} (✓ EPSG:4326)")
-        print(f"    - All geometries valid: ✓")
-        checks_passed += 1
-except Exception as e:
-    errors.append(f"Failed to load grid GeoJSON: {e}")
+def check_geojson_layers(
+    errors: list[str], warnings: list[str]
+) -> tuple[bool, gpd.GeoDataFrame | None, gpd.GeoDataFrame | None]:
+    points_path = DATA_PROCESSED / "map_points_sample.geojson"
+    grid_path = DATA_PROCESSED / "map_grid_cells.geojson"
+    points_gdf = None
+    grid_gdf = None
+    failed = False
 
-# ============================================================================
-# CHECK 3: Residuals CSV
-# ============================================================================
-print("\n[3] Validating residuals CSV...")
-
-try:
-    resid_df = pd.read_csv(OUTPUT_TABLES / "residuals_for_map.csv")
-    print(f"  ✓ Residuals CSV: {len(resid_df)} rows")
-    
-    # Check columns
-    required_cols = ['listing_id', 'log_price', 'residual_OLS', 'residual_SAR', 'residual_SEM', 'abs_residual_SAR']
-    missing_cols = [c for c in required_cols if c not in resid_df.columns]
-    if missing_cols:
-        errors.append(f"Residuals CSV missing columns: {missing_cols}")
-    else:
-        print(f"    - All required columns present: ✓")
-        checks_passed += 1
-    
-    # Check for NaN
-    nan_counts = resid_df.isnull().sum()
-    if nan_counts.sum() > 0:
-        warnings.append(f"Residuals CSV has {nan_counts.sum()} NaN values")
-        print(f"    - NaN check: {nan_counts.sum()} missing values (warning)")
-    else:
-        print(f"    - No missing values: ✓")
-    
-    # Check numeric ranges
-    for col in ['residual_OLS', 'residual_SAR', 'residual_SEM']:
-        if col in resid_df.columns:
-            min_val = resid_df[col].min()
-            max_val = resid_df[col].max()
-            mean_val = resid_df[col].mean()
-            print(f"    - {col}: [{min_val:.3f}, {max_val:.3f}] (mean={mean_val:.4f})")
-            if abs(mean_val) > 0.1:
-                warnings.append(f"{col} mean = {mean_val:.4f} (expected ≈0)")
-    
-    checks_passed += 1
-    
-except Exception as e:
-    errors.append(f"Failed to load residuals CSV: {e}")
-
-# ============================================================================
-# CHECK 4: Merge consistency
-# ============================================================================
-print("\n[4] Checking data merge consistency...")
-
-try:
-    # Points should be subset of residuals
-    points_ids = set(gdf_points['listing_id'].unique())
-    resid_ids = set(resid_df['listing_id'].unique())
-    
-    missing_from_resid = points_ids - resid_ids
-    if missing_from_resid:
-        errors.append(f"{len(missing_from_resid)} point IDs not in residuals CSV")
-    else:
-        print(f"  ✓ All {len(points_ids)} point listing_ids in residuals CSV")
-        checks_passed += 1
-except Exception as e:
-    warnings.append(f"Could not check merge consistency: {e}")
-
-# ============================================================================
-# CHECK 5: Color scale validity
-# ============================================================================
-print("\n[5] Validating color scale...")
-
-# Residual ranges for color mapping
-residual_ranges = [-2.5, -1.0, -0.5, -0.1, 0.1, 0.5, 1.0, 2.5]
-print(f"  Color scale validation:")
-print(f"    - Residual ranges: {residual_ranges}")
-print(f"    - Blue-gray-red diverging palette: ✓")
-checks_passed += 1
-
-# ============================================================================
-# CHECK 6: Streamlit app exists and readable
-# ============================================================================
-print("\n[6] Checking Streamlit app...")
-
-app_path = PROJECT_ROOT / "webmap" / "app.py"
-if app_path.exists():
     try:
-        with open(app_path, 'r') as f:
-            content = f.read()
-            if 'streamlit' in content and 'folium' in content:
-                print(f"  ✓ webmap/app.py exists and contains streamlit/folium imports")
-                checks_passed += 1
-            else:
-                warnings.append("app.py missing streamlit/folium imports")
-    except Exception as e:
-        errors.append(f"Cannot read app.py: {e}")
+        points_gdf = gpd.read_file(points_path)
+        print(f"  - Points features: {len(points_gdf)}")
+        if str(points_gdf.crs) != EXPECTED_WEB_CRS:
+            warnings.append(
+                f"Points CRS is {points_gdf.crs}; expected {EXPECTED_WEB_CRS}"
+            )
+        if points_gdf.geometry.isna().any():
+            failed = True
+            errors.append("Points GeoJSON contains NULL geometries")
+        if not points_gdf.geometry.is_valid.all():
+            failed = True
+            errors.append("Points GeoJSON contains invalid geometries")
+    except Exception as exc:
+        failed = True
+        errors.append(f"Failed to read points GeoJSON: {exc}")
 
-# ============================================================================
-# SUMMARY
-# ============================================================================
-print("\n" + "=" * 80)
-print("SUMMARY")
-print("=" * 80)
+    try:
+        grid_gdf = gpd.read_file(grid_path)
+        print(f"  - Grid features: {len(grid_gdf)}")
+        if str(grid_gdf.crs) != EXPECTED_WEB_CRS:
+            warnings.append(f"Grid CRS is {grid_gdf.crs}; expected {EXPECTED_WEB_CRS}")
+        if grid_gdf.geometry.isna().any():
+            failed = True
+            errors.append("Grid GeoJSON contains NULL geometries")
+        if not grid_gdf.geometry.is_valid.all():
+            failed = True
+            errors.append("Grid GeoJSON contains invalid geometries")
+    except Exception as exc:
+        failed = True
+        errors.append(f"Failed to read grid GeoJSON: {exc}")
 
-print(f"\nChecks passed: {checks_passed}/6")
+    return (not failed), points_gdf, grid_gdf
 
-if errors:
-    print(f"\n🔴 ERRORS ({len(errors)}):")
-    for err in errors:
-        print(f"   - {err}")
-    print("\n❌ Quality assurance FAILED. Fix issues before launching webmap.")
-    sys.exit(1)
 
-if warnings:
-    print(f"\n🟡 WARNINGS ({len(warnings)}):")
-    for warn in warnings:
-        print(f"   - {warn}")
-    print("\n⚠️  Warnings found. Proceed with caution.")
-else:
-    print(f"\n✅ No warnings.")
+def check_residual_table(
+    errors: list[str], warnings: list[str]
+) -> tuple[bool, pd.DataFrame | None]:
+    residual_path = OUTPUT_TABLES / "residuals_for_map.csv"
+    residual_df = None
+    failed = False
 
-if not errors:
-    print("\n" + "🟢 " * 20)
-    print("WEBMAP IS READY FOR LAUNCH")
-    print("🟢 " * 20)
-    print("\nNext step:")
+    try:
+        residual_df = pd.read_csv(residual_path)
+        print(f"  - Residual rows: {len(residual_df)}")
+
+        missing_columns = [
+            column for column in REQUIRED_RESIDUAL_COLUMNS if column not in residual_df.columns
+        ]
+        if missing_columns:
+            failed = True
+            errors.append(f"Residuals CSV missing columns: {missing_columns}")
+
+        nan_total = int(residual_df.isna().sum().sum())
+        if nan_total > 0:
+            warnings.append(f"Residuals CSV contains {nan_total} missing values")
+
+        for column in ["residual_OLS", "residual_SAR", "residual_SEM"]:
+            if column in residual_df.columns:
+                col_min = residual_df[column].min()
+                col_max = residual_df[column].max()
+                col_mean = residual_df[column].mean()
+                print(
+                    f"  - {column}: min={col_min:.3f}, max={col_max:.3f}, mean={col_mean:.4f}"
+                )
+                if abs(float(col_mean)) > 0.1:
+                    warnings.append(
+                        f"{column} mean is {col_mean:.4f}; expected approximately 0"
+                    )
+    except Exception as exc:
+        failed = True
+        errors.append(f"Failed to read residuals CSV: {exc}")
+
+    return (not failed), residual_df
+
+
+def check_id_consistency(
+    points_gdf: gpd.GeoDataFrame | None,
+    residual_df: pd.DataFrame | None,
+    errors: list[str],
+    warnings: list[str],
+) -> bool:
+    if points_gdf is None or residual_df is None:
+        warnings.append("ID consistency check skipped because required data could not be loaded")
+        return False
+
+    if "listing_id" not in points_gdf.columns:
+        errors.append("Points GeoJSON missing required column: listing_id")
+        return False
+    if "listing_id" not in residual_df.columns:
+        errors.append("Residuals CSV missing required column: listing_id")
+        return False
+
+    point_ids = set(points_gdf["listing_id"].dropna().unique())
+    residual_ids = set(residual_df["listing_id"].dropna().unique())
+    missing_ids = point_ids - residual_ids
+    if missing_ids:
+        errors.append(f"{len(missing_ids)} listing_id values in points are missing in residuals")
+        return False
+
+    print(f"  - Consistent IDs: {len(point_ids)}")
+    return True
+
+
+def check_color_scale() -> bool:
+    print(f"  - Residual class breaks: {RESIDUAL_SCALE_BREAKS}")
+    return True
+
+
+def check_streamlit_app(errors: list[str], warnings: list[str]) -> bool:
+    app_path = PROJECT_ROOT / "webmap" / "app.py"
+    if not app_path.exists():
+        errors.append(f"Missing Streamlit app: {app_path}")
+        return False
+
+    try:
+        content = app_path.read_text(encoding="utf-8")
+    except Exception as exc:
+        errors.append(f"Cannot read Streamlit app: {exc}")
+        return False
+
+    has_streamlit = "streamlit" in content
+    has_folium = "folium" in content
+    if not has_streamlit or not has_folium:
+        warnings.append("webmap/app.py does not clearly contain both streamlit and folium references")
+
+    print("  - Streamlit app file is readable")
+    return True
+
+
+def print_summary(total_checks: int, passed_checks: int, errors: list[str], warnings: list[str]) -> None:
+    print("\n" + "=" * 80)
+    print("SUMMARY")
+    print("=" * 80)
+    print(f"\nChecks passed: {passed_checks}/{total_checks}")
+    print(f"Warnings: {len(warnings)}")
+    print(f"Errors: {len(errors)}")
+
+    if errors:
+        print(f"\nERRORS ({len(errors)}):")
+        for message in errors:
+            print(f"  - {message}")
+        print("\nStatus: FAIL")
+        print("Action required: resolve blocking errors before launching the webmap.")
+        sys.exit(1)
+
+    if warnings:
+        print(f"\nWARNINGS ({len(warnings)}):")
+        for message in warnings:
+            print(f"  - {message}")
+        print("\nStatus: PASS WITH WARNINGS")
+    else:
+        print("\nNo warnings detected.")
+        print("Status: PASS")
+
+    print("\nSuggested commands:")
     print("  micromamba activate geo")
     print("  streamlit run webmap/app.py")
-    print("\nOr use launcher script:")
-    print("  python scripts/run_webmap.sh")
+    print("  # or")
+    print("  bash webmap/run.sh")
+
+
+def main() -> None:
+    print_header()
+
+    errors: list[str] = []
+    warnings: list[str] = []
+    total_checks = 6
+    passed_checks = 0
+
+    file_check = check_required_files(errors)
+    print_check_result(1, "Required files", file_check)
+    if file_check:
+        passed_checks += 1
+
+    geo_check, points_gdf, grid_gdf = check_geojson_layers(errors, warnings)
+    print_check_result(2, "GeoJSON layers", geo_check)
+    if geo_check:
+        passed_checks += 1
+
+    residual_check, residual_df = check_residual_table(errors, warnings)
+    print_check_result(3, "Residual table", residual_check)
+    if residual_check:
+        passed_checks += 1
+
+    id_check = check_id_consistency(points_gdf, residual_df, errors, warnings)
+    print_check_result(4, "ID consistency", id_check)
+    if id_check:
+        passed_checks += 1
+
+    color_check = check_color_scale()
+    print_check_result(5, "Color scale", color_check)
+    if color_check:
+        passed_checks += 1
+
+    app_check = check_streamlit_app(errors, warnings)
+    print_check_result(6, "Streamlit app", app_check)
+    if app_check:
+        passed_checks += 1
+
+    _ = grid_gdf
+    print_summary(total_checks, passed_checks, errors, warnings)
+
+
+if __name__ == "__main__":
+    main()
