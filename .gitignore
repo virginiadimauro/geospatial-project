@@ -15,6 +15,10 @@ outputs/*
 __pycache__/
 *.pyc
 
+# Local test reports
+TEST_REPORT.md
+TEST_REPO*
+
 # LaTeX build
 report/*.aux
 report/*.log
