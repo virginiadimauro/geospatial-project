@@ -1,96 +1,142 @@
-# Reproducibility
+# Reproducibility (Source of Truth)
 
-## Environment Setup
+This document is the authoritative reference for reproducibility: environment constraints, required inputs, pipeline execution order, sample definitions, and CRS/unit policy.
 
-### Official Environment Creation
-To ensure reproducible results, use the pinned `environment.yml`:
+## 1) Environment (pinned)
+
+Create and activate exactly from `environment/environment.yml`:
 
 ```bash
-micromamba create -n geo -f environment/environment.yml -y
+micromamba env create -f environment/environment.yml
 micromamba activate geo
 ```
 
-### Environment Details
-- **Python**: 3.12
-- **NumPy**: 2.3.* (pinned for compatibility with `numba 0.63.1` — required for `libpysal`)
-- **Spatial Stack**: `libpysal`, `esda`, `spreg` (no pip; all conda-forge)
-- **Data Stack**: `geopandas`, `shapely`, `pyproj`, `fiona`, `rasterio`, `gdal` (osgeo)
-- **Viz**: `matplotlib`, `seaborn`, `jupyterlab`
-- **Stats**: `pandas`, `scipy`, `scikit-learn`, `statsmodels`
+Environment expectations:
+- Python 3.12
+- NumPy pinning is defined in `environment/environment.yml` for compatibility with the spatial stack (`numba`, `libpysal`, `esda`, `spreg`)
+- Geospatial stack is fully conda-based via the environment file
 
-### Verifying Installation
-After activation, test:
+Verification commands:
+
 ```bash
 python -c "import numpy, numba; print('numpy', numpy.__version__, 'numba', numba.__version__)"
-python -c "import libpysal; from libpysal.weights import KNN, Queen; import esda, spreg; print('PySAL OK')"
+python -c "import libpysal, esda, spreg; print('PySAL OK')"
 python -c "import geopandas, shapely, pyproj, fiona, rasterio; from osgeo import gdal; print('Geo stack OK')"
 ```
 
-## Data Cleaning & Wrangling
+## 2) Raw inputs (official required)
 
-### Sample Flow and Audit Trail
+Download all files from the Madrid snapshot and store them in `data/original/`.
 
-The analysis follows a rigorous two-stage sample definition:
+Required snapshot files to download:
+- `listings.csv.gz` (detailed listings)
+- `calendar.csv.gz` (detailed calendar)
+- `reviews.csv.gz` (detailed reviews)
+- `listings.csv` (summary listings)
+- `reviews.csv` (summary reviews)
+- `neighbourhoods.csv`
+- `neighbourhoods.geojson`
 
-| Stage | Action | N_remaining | N_dropped | Reason |
-|-------|--------|-------------|-----------|--------|
-| **0** | Initial load from `listings_clean.parquet` | 24,987 | — | Starting dataset |
-| **1** | Price parsing (exclude NaN/unparseable) | **18,940** | 6,047 | Invalid or missing price values |
-| **2** | Winsorization (p=0.5%, p=99.5%) | **18,765** | 175 | Extreme outliers (€19–€999 price range) |
-| **3** | Feature engineering + dropna on model covariates | **15,641** | 3,124 | Missing log_price or any of 140 model features |
+Required local filenames in this project (collision-safe naming):
+- `listings.csv`, `calendar.csv`, `reviews.csv` (extracted detailed files)
+- `listings_summary.csv`, `reviews_summary.csv` (summary files)
+- `neighbourhoods.csv`, `neighbourhoods.geojson`
 
-**Detailed audit trail**: see `outputs/tables/sample_flow.csv`
+Source used in this project:
+- https://insideairbnb.com/get-the-data/
+- Madrid, Comunidad de Madrid, Spain — 14 September, 2025
 
-#### Sample Definitions
+Example download commands:
 
-1. **"Price-Valid" Sample (N=18,940)**
-   - Used in: `scripts/04_spatial_autocorr_morans_i.py` (Moran's I listing-level analysis)
-   - Includes all listings with valid and winsorized prices
-   - Sufficient for neighbourhood-level aggregation but not for feature-complete regression
-
-2. **"Model-Complete" Sample (N=15,641)**
-   - Used in: `scripts/03_ols_price_analysis.py`, `scripts/05_lm_diagnostic_tests.py`, `scripts/06_morans_i_subset_consistency_check.py`, `scripts/07_spatial_models_sar_sem.py`
-   - Includes only listings with valid prices **and complete covariate data** (property, host, room type, location, neighbourhood features)
-   - Ensures consistency across all spatial diagnostic tests (Moran's I, LM-lag, LM-error) and model estimation (OLS, SAR, SEM)
-   - Sample size reduction of 3,124 due to missing values in: `bedrooms`, `beds`, `bathrooms`, `review_scores_rating`, `neighbourhood_cleansed`, and derived features
-
-**Key principle**: All diagnostic tests and spatial models (scripts 05–07) operate on the same sample (N=15,641) to ensure valid comparisons.
-
-## Run pipeline
-
-The main reproducible pipeline includes:
-
-1. **QC spatial sanity checks**:
 ```bash
-python scripts/01_verify_spatial_data.py
+cd data/original
+curl -L -O https://data.insideairbnb.com/spain/comunidad-de-madrid/madrid/2025-09-14/data/listings.csv.gz
+curl -L -O https://data.insideairbnb.com/spain/comunidad-de-madrid/madrid/2025-09-14/data/calendar.csv.gz
+curl -L -O https://data.insideairbnb.com/spain/comunidad-de-madrid/madrid/2025-09-14/data/reviews.csv.gz
+curl -L https://data.insideairbnb.com/spain/comunidad-de-madrid/madrid/2025-09-14/data/listings.csv -o listings_summary.csv
+curl -L https://data.insideairbnb.com/spain/comunidad-de-madrid/madrid/2025-09-14/data/reviews.csv -o reviews_summary.csv
+curl -L -O https://data.insideairbnb.com/spain/comunidad-de-madrid/madrid/2025-09-14/visualisations/neighbourhoods.csv
+curl -L -O https://data.insideairbnb.com/spain/comunidad-de-madrid/madrid/2025-09-14/visualisations/neighbourhoods.geojson
+gunzip -f listings.csv.gz calendar.csv.gz reviews.csv.gz
+cd ../..
 ```
 
-2. **Generate static report figure** (overview + inset with price quantiles):
-```bash
-python scripts/02_make_static_map_overview_inset.py
-```
+## 3) Authoritative pipeline order
 
-3. **Full end-to-end ETL** (cleaning, enrichment, spatial joins, aggregation):
+Run commands from project root.
+
+### Phase A — Data preparation
+
 ```bash
 jupyter notebook notebooks/05_final_pipeline.ipynb
 ```
 
-### Inputs & Outputs
+Expected outputs in `data/processed/` include:
+- `listings_clean.parquet`
+- `model_sample.parquet`
+- `neighbourhoods_enriched.geojson`
+- `calendar_enriched_with_neighbourhoods.parquet`
+- `reviews_clean.parquet`
 
-**Inputs** (assumed to be in `data/original/`):
-- `calendar.csv`, `listings.csv`, `reviews.csv`, `neighbourhoods.geojson`
+Skip Phase A only if you already ran it locally and `data/processed/` contains the listed outputs.
 
-**Outputs**:
-- Processed datasets: `data/processed/*.parquet`, `data/processed/*.geojson`
-- Static report figures: **`reports/figures/*.png`** (unified location)
+### Phase B — Analyses
 
-## Notes
-- Distances/areas must be computed in a projected CRS (meters), not EPSG:4326.
-- Always check CRS, geometry validity, missing values and outliers.
-- **NumPy Pinning**: NumPy is pinned to `2.3.*` for compatibility with `numba 0.63.1` (required by `libpysal`). Do not upgrade NumPy without re-testing the full spatial weights and analysis pipeline.
+```bash
+python scripts/01_verify_spatial_data.py
+python scripts/03_ols_price_analysis.py
+python scripts/04_spatial_autocorr_morans_i.py
+python scripts/05_lm_diagnostic_tests.py
+python scripts/06_morans_i_subset_consistency_check.py
+python scripts/07_spatial_models_sar_sem.py
+python scripts/02_make_static_map_overview_inset.py
+```
 
-### Data & Environment Management for Reproducibility
-- Raw InsideAirbnb files (e.g., `calendar.csv`, `reviews.csv`, `listings.csv`) are not tracked in git due to size/licensing; place them locally in `data/original/`.
-- The project is fully reproducible: all processed datasets in `data/processed/` can be regenerated by running the pipeline scripts/notebooks.
-- Small web-ready artifacts (e.g., `data/processed/neighbourhoods_enriched.geojson` and `data/processed/listings_points_enriched_sample.geojson`) may be tracked to support fast webmap rendering.
-- Final report figures are stored in `reports/figures/`.
+### Phase C — Web map (optional visualization)
+
+```bash
+bash webmap/run.sh
+```
+
+Alternative launch:
+
+```bash
+streamlit run webmap/app.py
+```
+
+## 4) Sample flow and analysis samples
+
+Reference audit trail:
+- `outputs/tables/sample_flow.csv`
+
+Filtering flow:
+
+| Stage | Action | N remaining | N dropped |
+|---|---|---:|---:|
+| 0 | Initial load | 24,987 | — |
+| 1 | Price parsing (valid/non-missing) | 18,940 | 6,047 |
+| 2 | Winsorization (0.5%–99.5%) | 18,765 | 175 |
+| 3 | Complete covariates for models | 15,641 | 3,124 |
+
+Sample definitions:
+
+1. **Price-valid sample (N=18,940)**
+   - Used for listing-level Moran’s I in `scripts/04_spatial_autocorr_morans_i.py`.
+
+2. **Model-complete sample (N=15,641)**
+   - Used in `scripts/03_ols_price_analysis.py`, `scripts/05_lm_diagnostic_tests.py`, `scripts/06_morans_i_subset_consistency_check.py`, `scripts/07_spatial_models_sar_sem.py`.
+
+## 5) CRS and units policy
+
+- Use projected CRS (meters) for metric operations (distance/area/weights).
+- Do not use EPSG:4326 for metric computations.
+- Check CRS consistency before spatial joins, weights, and model estimation.
+
+## 6) Output folders policy
+
+Project-wide policy:
+- `outputs/` → tables and intermediate artifacts
+- `reports/figures/` → final report figures
+
+Related outputs:
+- Static web map: `reports/maps/interactive_map.html`
