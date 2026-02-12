@@ -2,6 +2,9 @@
 data/*
 outputs/*
 !data/.gitkeep
+!data/original/
+data/original/*
+!data/original/.gitkeep
 !outputs/.gitkeep
 
 # notebooks checkpoints
